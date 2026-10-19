@@ -10,8 +10,9 @@ Three tools for AI agents and the people who run them:
                                         https://reader.agent-shelter.org/v1/reader?url=<target>&envelope=200
 
 The reference node never fetches a target. Its reader answers with the ASP terminal signal (RFC 9457 problem details
-with "terminal": true and "success_probability": 0) and a resolution URL with a single-use ticket. envelope=200 asks
-for that same object with HTTP status 200, for fetch tools that hand a model no body of a 4xx response. The node also
+with "terminal": true and "success_probability": 0) and a single-use ticket of 48 characters, carried in the header
+Agent-Ticket and in the members ticket, resolution_url and resolution_uri. envelope=200 asks for that same object with
+HTTP status 200, for fetch tools that hand a model no body of a 4xx response. The node also
 records pseudonymised telemetry about requests to its ingress routes: https://agent-shelter.org/privacy.
 
 This tool stores nothing, needs only the Python standard library, contacts public hosts only, follows no redirects
@@ -36,7 +37,7 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 NODE = "https://agent-shelter.org"
 ECHO_URL = "https://echo.agent-shelter.org/headers"
@@ -50,8 +51,8 @@ TIMEOUT_S = 10.0
 MAX_BODY = 256 * 1024
 MAX_URL_CHARS = 2048
 MAX_REQUEST = 1024 * 1024
-HEADERS_SHOWN = ("content-type", "agent-loop-state", "agent-resolution", "link", "x-asp-discovery", "location",
-                 "cache-control", "x-robots-tag")
+HEADERS_SHOWN = ("content-type", "agent-loop-state", "agent-resolution", "agent-ticket", "link", "x-asp-discovery",
+                 "location", "cache-control", "x-robots-tag")
 PROTOCOL_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
 STRUCTURED_SINCE = "2025-06-18"  # first MCP revision with structuredContent in tool results
 HTTP_DEFAULT_VERSION = "2025-03-26"  # what a Streamable HTTP request without MCP-Protocol-Version speaks
@@ -221,14 +222,18 @@ def _signal_report(reply: Reply) -> dict[str, Any]:
         "loop_state": body.get("loop_state"),
         "asp_version": body.get("asp_version"),
         "detail": body.get("detail"),
+        "ticket": body.get("ticket") or reply.headers.get("agent-ticket"),
         "resolution_url": body.get("resolution_url"),
+        "resolution_uri": body.get("resolution_uri"),
         "resolution_method": body.get("resolution_method"),
         "ticket_ttl_seconds": body.get("ticket_ttl_seconds"),
         "problem_details": body,
-        "finding": ("The node does not fetch the target. Its answer is the ASP terminal signal: further requests for "
-                    "this resource through this host have success probability 0. Redeeming the single-use ticket of "
-                    "resolution_url (POST, within ticket_ttl_seconds) returns a signed Task-Completion Receipt that "
-                    "documents the terminal state; it does not claim the original task was done."),
+        "finding": ("The node does not fetch the target. Its answer is the ASP terminal signal: this request and every "
+                    "repetition of it through this host have success probability 0 for the resource. The single-use "
+                    "ticket maps to a signed Task-Completion Receipt that documents the terminal state (POST to the "
+                    "resolve endpoint within ticket_ttl_seconds, with the ticket in the query parameter ticket, the "
+                    "request header Agent-Ticket or the body member ticket); the receipt does not claim that the "
+                    "original task was done."),
     }
 
 
@@ -262,7 +267,9 @@ def check_asp_manifest(domain_or_url: str | None = None, *, allow_local: bool = 
         signal_status=signal.get("status"),
         transport_envelope=bool(signal.get("transport_envelope")),
         resolution=({"endpoint": resolution.get("endpoint"), "method": resolution.get("method"),
-                     "ticket_ttl_seconds": resolution.get("ticket_ttl_seconds")} if resolution else None),
+                     "ticket_ttl_seconds": resolution.get("ticket_ttl_seconds"),
+                     "ticket_format": (resolution.get("ticket_format") or {}).get("name"),
+                     "ticket_redemption": resolution.get("ticket_redemption")} if resolution else None),
         signed_receipts=({"algorithm": keys.get("algorithm"), "key_id": keys.get("key_id")} if keys else None),
         discovery_correlation=({"enabled": correlation.get("enabled"),
                                 "window_seconds": correlation.get("window_seconds")} if correlation else None),
@@ -355,8 +362,9 @@ TOOLS: list[dict[str, Any]] = [
             "Asks the reader of the ASP reference node what it does with a target URL (GET "
             "https://reader.agent-shelter.org/v1/reader?url=<target_url>&envelope=200). The reader never fetches the "
             "target: it answers with the ASP terminal signal (RFC 9457 problem details, terminal true, "
-            "success_probability 0) and a resolution URL with a single-use ticket, carried with HTTP 200 because of "
-            "envelope=200. The target URL is sent to agent-shelter.org, which records it (shortened, secrets "
+            "success_probability 0) and a single-use ticket (48 characters, also in the header Agent-Ticket and in "
+            "an absolute resolution_uri), carried with HTTP 200 because of envelope=200. The target URL is sent to "
+            "agent-shelter.org, which records it (shortened, secrets "
             "scrubbed) with pseudonymised client data when the request follows a discovery request from the same "
             f"network or the ticket is redeemed; see {PRIVACY_URL}."),
         "inputSchema": {"type": "object", "required": ["target_url"], "properties": {"target_url": {

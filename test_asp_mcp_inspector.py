@@ -22,13 +22,15 @@ import asp_mcp_inspector as inspector  # noqa: E402
 
 MODULE = Path(inspector.__file__).resolve()
 SIGNAL = {"type": "/asp/problems/unproductive-retry", "title": "Unproductive retry detected", "status": 429,
-          "detail": "This interface does not retrieve upstream resources.", "asp_version": "0.5.2",
+          "detail": "This interface does not retrieve upstream resources.", "asp_version": "0.5.3",
           "loop_state": "unproductive-retry-detected", "terminal": True, "success_probability": 0,
-          "resolution_url": "/api/v1/agent-shelter/resolve?ticket=sample-ticket", "resolution_method": "POST",
-          "ticket_ttl_seconds": 600}
+          "ticket": "c1.sample-ticket-identifier.sample-ticket-mac-value",
+          "resolution_url": "/api/v1/agent-shelter/resolve?ticket=c1.sample-ticket-identifier.sample-ticket-mac-value",
+          "resolution_uri": "https://sensor.example/api/v1/agent-shelter/resolve?ticket=c1.sample-ticket-identifier.sample-ticket-mac-value",
+          "resolution_method": "POST", "ticket_ttl_seconds": 600}
 SIGNAL_HEADERS = {"Agent-Loop-State": "unproductive-retry-detected; terminal=true",
-                  "Agent-Resolution": '"/api/v1/agent-shelter/resolve?ticket=sample-ticket"; method=POST'}
-MANIFEST = {"asp_version": "0.5.2", "compliance_level": "L3-observatory", "service": "Sample node",
+                  "Agent-Resolution": f'"{SIGNAL["resolution_url"]}"; method=POST', "Agent-Ticket": SIGNAL["ticket"]}
+MANIFEST = {"asp_version": "0.5.3", "compliance_level": "L3-observatory", "service": "Sample node",
             "upstream_fetch": False, "statement": "A sample manifest.",
             "ingress_routes": [{"method": "GET", "path": "/v1/reader", "behaviour": "immediate-terminal-signal"}],
             "signal": {"status": 429, "transport_envelope": {"query_parameter": "envelope=200", "status": 200}},
@@ -107,7 +109,7 @@ class InspectorTests(unittest.TestCase):
     def test_manifest_is_summarised(self):
         report = inspector.check_asp_manifest(self.base, allow_local=True)
         self.assertTrue(report["asp_manifest"])
-        self.assertEqual(report["asp_version"], "0.5.2")
+        self.assertEqual(report["asp_version"], "0.5.3")
         self.assertEqual(report["compliance_level"], "L3-observatory")
         self.assertTrue(report["transport_envelope"])
         self.assertEqual(report["ingress_routes"], ["GET /v1/reader (immediate-terminal-signal)"])
@@ -131,6 +133,8 @@ class InspectorTests(unittest.TestCase):
         self.assertTrue(report["transport"].startswith("envelope"))
         self.assertEqual(report["problem_details"]["status"], 429)
         self.assertTrue(report["resolution_url"].startswith("/api/v1/agent-shelter/resolve?ticket="))
+        self.assertEqual((report["ticket"], report["headers"]["agent-ticket"]), (SIGNAL["ticket"], SIGNAL["ticket"]))
+        self.assertTrue(report["resolution_uri"].endswith(report["resolution_url"]))
         path, query, _ = StubNode.seen[0]
         self.assertEqual((path, query["url"], query["envelope"]),
                          ("/v1/reader", ["https://example.org/tiles/1?x=1&y=2"], ["200"]))

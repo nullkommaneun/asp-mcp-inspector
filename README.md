@@ -16,7 +16,7 @@ It gives an AI agent three tools:
 |---|---|---|
 | `check_asp_manifest(domain_or_url)` | `GET <origin>/.well-known/agent-shelter.json` (default: `https://agent-shelter.org`) | Whether the host speaks ASP: protocol version, compliance level, ingress routes, transport envelope, receipt-signing key, recording rules |
 | `probe_diagnostic_echo()` | `GET https://echo.agent-shelter.org/headers` | A local echo of its own request header fields on first contact; the ASP terminal signal on a repeated call |
-| `query_reader_disposition(target_url)` | `GET https://reader.agent-shelter.org/v1/reader?url=<target_url>&envelope=200` | What the reader does with the URL: it never fetches it and answers with the terminal signal (`terminal: true`, `success_probability: 0`) and a resolution URL with a single-use ticket |
+| `query_reader_disposition(target_url)` | `GET https://reader.agent-shelter.org/v1/reader?url=<target_url>&envelope=200` | What the reader does with the URL: it never fetches it and answers with the terminal signal (`terminal: true`, `success_probability: 0`) and a single-use ticket of 48 characters — in the header `Agent-Ticket` and the members `ticket`, `resolution_url` and `resolution_uri` |
 
 Standard library only, Python 3.10 or later, no dependencies.
 
@@ -67,6 +67,14 @@ details object with HTTP status 200 and the extra member `"transport_envelope": 
 `429`; because [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) wants that member to equal the HTTP status of a
 problem details response, the enveloped answer is served as `application/json`. The inspector asks for it and reads
 the plain 429 answer of older nodes as well.
+
+## The ticket and its receipt
+
+The single-use ticket (`c1.<ticket_id>.<mac>`, 48 characters) maps to an Ed25519-signed Task-Completion Receipt:
+`POST https://reader.agent-shelter.org/api/v1/agent-shelter/resolve` with the ticket in the query parameter `ticket`, the
+request header `Agent-Ticket` or the JSON body member `ticket`, within `ticket_ttl_seconds`. The receipt documents that
+the resource was not retrieved through this host — never that the original task was done — and its signature can be
+checked offline against the key in the node's manifest. The inspector reports the ticket; it redeems nothing itself.
 
 ## What the reference node records — read before use
 
