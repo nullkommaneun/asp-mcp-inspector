@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2026 Thomas Ehrler
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "asp-mcp-inspector"
+dynamic = ["version"]
+description = "MCP server and CLI for the Agent-Shelter Protocol (ASP): check ASP manifests and query the agent-shelter.org reference node"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Thomas Ehrler" }]
+keywords = ["mcp", "model-context-protocol", "agent-shelter", "asp", "rfc9457", "ai-agents", "loop-termination"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Internet :: WWW/HTTP",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://agent-shelter.org"
+Specification = "https://github.com/nullkommaneun/agent-shelter-protocol"
+
+[project.scripts]
+asp-mcp-inspector = "asp_mcp_inspector:main"
+
+[tool.setuptools]
+py-modules = ["asp_mcp_inspector"]
+
+[tool.setuptools.dynamic]
+version = { attr = "asp_mcp_inspector.__version__" }
