@@ -14,7 +14,7 @@ It gives an AI agent three tools:
 
 | Tool | Request | What the agent gets |
 |---|---|---|
-| `check_asp_manifest(domain_or_url)` | `GET <origin>/.well-known/agent-shelter.json` (default: `https://agent-shelter.org`) | Whether the host speaks ASP: protocol version, compliance level, ingress routes, transport envelope, receipt-signing key, recording rules |
+| `check_asp_manifest(domain_or_url)` | `GET <origin>/.well-known/agent-shelter.json` (default: `https://agent-shelter.org`) | Whether the host speaks ASP: protocol version, compliance level, ingress routes, transport envelope, receipt-signing key, resolution methods, recording rules |
 | `probe_diagnostic_echo()` | `GET https://echo.agent-shelter.org/headers` | A local echo of its own request header fields on first contact; the ASP terminal signal on a repeated call |
 | `query_reader_disposition(target_url)` | `GET https://reader.agent-shelter.org/v1/reader?url=<target_url>&envelope=200` | What the reader does with the URL: it never fetches it and answers with the terminal signal (`terminal: true`, `success_probability: 0`) and a single-use ticket of 48 characters — in the header `Agent-Ticket` and the members `ticket`, `resolution_url` and `resolution_uri` |
 
@@ -72,9 +72,16 @@ the plain 429 answer of older nodes as well.
 
 The single-use ticket (`c1.<ticket_id>.<mac>`, 48 characters) maps to an Ed25519-signed Task-Completion Receipt:
 `POST https://reader.agent-shelter.org/api/v1/agent-shelter/resolve` with the ticket in the query parameter `ticket`, the
-request header `Agent-Ticket` or the JSON body member `ticket`, within `ticket_ttl_seconds`. The receipt documents that
-the resource was not retrieved through this host — never that the original task was done — and its signature can be
-checked offline against the key in the node's manifest. The inspector reports the ticket; it redeems nothing itself.
+request header `Agent-Ticket` or the JSON body member `ticket`, within `ticket_ttl_seconds`. Since ASP 0.5.5 a node that
+lists `GET` in `resolution_methods` performs the same single-use transition for a plain `GET` of `resolution_uri` —
+for clients that can only read; optional telemetry then travels as query parameters. Either way the ticket is redeemed
+once. The receipt documents that the resource was not retrieved through this host — never that the original task was
+done — and its signature can be checked offline against the key in the node's manifest. The signal holds the ticket,
+not the proof: `receipt_id`, `receipt_signature` and `sanctuary_bulletin.dropbox_url` exist only in the response of the
+resolution. That drop box takes one optional context report per receipt — by `POST` with a JSON body or, since ASP
+0.5.6, by `GET` with the query parameters `workflow_summary` and `agent_questions_or_notes`; a bare `GET` of the drop
+box archives nothing, so a link preloader cannot use it up. The inspector reports the ticket, the resolution methods
+and the drop-box methods of the manifest (`context_report`); it redeems nothing and submits nothing itself.
 
 ## What the reference node records — read before use
 
@@ -90,7 +97,11 @@ describe both.
   requests, so a later `query_reader_disposition` or a second echo call from the same network is recorded.
 - A record holds the requested URL (shortened, with secrets and e-mail addresses scrubbed), a salted hash of the
   client's /24 (IPv4) or /48 (IPv6) network, the User-Agent with the order of the request header names, and the host
-  name addressed — never a plain IP address. Redeeming a ticket creates the record or completes it.
+  name addressed — never a plain IP address. Redeeming a ticket creates the record or completes it; a context report
+  left at the receipt's drop box is stored with it, scrubbed.
+- Requests for the node and discovery documents — the manifest that `check_asp_manifest` reads among them — are counted
+  in aggregate (ASP 0.5.5 on): per document and client class, a number and the time of the latest request; the
+  User-Agent text, the address and the network hash are not kept.
 - The inspector identifies itself as `asp-mcp-inspector/<version>` in the User-Agent.
 
 Send no URL you would not show a third party.

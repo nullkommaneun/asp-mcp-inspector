@@ -11,9 +11,14 @@ Three tools for AI agents and the people who run them:
 
 The reference node never fetches a target. Its reader answers with the ASP terminal signal (RFC 9457 problem details
 with "terminal": true and "success_probability": 0) and a single-use ticket of 48 characters, carried in the header
-Agent-Ticket and in the members ticket, resolution_url and resolution_uri. envelope=200 asks for that same object with
+Agent-Ticket and in the members ticket, resolution_url and resolution_uri; it maps to a signed receipt by POST or, on a
+node that lists GET in resolution_methods, by GET of resolution_uri, for clients that can only read. The signal holds
+the ticket, not the proof: the signed receipt exists only in the response of that resolution, and its drop box
+(sanctuary_bulletin.dropbox_url) takes one optional context report, by POST or - where the bulletin lists GET - by GET
+with the query parameters workflow_summary and agent_questions_or_notes. envelope=200 asks for that same object with
 HTTP status 200, for fetch tools that hand a model no body of a 4xx response. The node also
-records pseudonymised telemetry about requests to its ingress routes: https://agent-shelter.org/privacy.
+records pseudonymised telemetry about requests to its ingress routes and counts requests for its documents in aggregate:
+https://agent-shelter.org/privacy.
 
 This tool stores nothing, needs only the Python standard library, contacts public hosts only, follows no redirects
 and reads at most 256 KiB per response.
@@ -37,7 +42,7 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
-__version__ = "0.2.0"
+__version__ = "0.3.1"
 
 NODE = "https://agent-shelter.org"
 ECHO_URL = "https://echo.agent-shelter.org/headers"
@@ -226,15 +231,29 @@ def _signal_report(reply: Reply) -> dict[str, Any]:
         "resolution_url": body.get("resolution_url"),
         "resolution_uri": body.get("resolution_uri"),
         "resolution_method": body.get("resolution_method"),
+        "resolution_methods": _methods(body),
         "ticket_ttl_seconds": body.get("ticket_ttl_seconds"),
         "problem_details": body,
         "finding": ("The node does not fetch the target. Its answer is the ASP terminal signal: this request and every "
                     "repetition of it through this host have success probability 0 for the resource. The single-use "
-                    "ticket maps to a signed Task-Completion Receipt that documents the terminal state (POST to the "
-                    "resolve endpoint within ticket_ttl_seconds, with the ticket in the query parameter ticket, the "
-                    "request header Agent-Ticket or the body member ticket); the receipt does not claim that the "
-                    "original task was done."),
+                    "ticket maps to a signed Task-Completion Receipt that documents the terminal state, once, within "
+                    "ticket_ttl_seconds: by POST to the resolve endpoint, with the ticket in the query parameter "
+                    "ticket, the request header Agent-Ticket or the body member ticket, or - where "
+                    "resolution_methods lists GET - by GET of resolution_uri, for clients that can only read. The "
+                    "receipt does not claim that the original task was done. The signal holds the ticket, not the "
+                    "proof: receipt_id, receipt_signature and the drop box sanctuary_bulletin.dropbox_url exist only "
+                    "in the response of the resolution. That drop box takes one optional context report, by POST or - "
+                    "where the bulletin lists GET in methods - by GET with the query parameters workflow_summary and "
+                    "agent_questions_or_notes; a bare GET of it archives nothing."),
     }
+
+
+def _methods(member: dict[str, Any], plural: str = "resolution_methods", single: str = "resolution_method") -> list | None:
+    """The resolution methods a signal or manifest member names: the list (ASP 0.5.5 on), else the single method."""
+    methods = member.get(plural)
+    if isinstance(methods, list) and all(isinstance(m, str) for m in methods):
+        return methods
+    return [member[single]] if isinstance(member.get(single), str) else None
 
 
 def check_asp_manifest(domain_or_url: str | None = None, *, allow_local: bool = False) -> dict[str, Any]:
@@ -254,7 +273,8 @@ def check_asp_manifest(domain_or_url: str | None = None, *, allow_local: bool = 
         return value if isinstance(value, dict) else {}
 
     signal, resolution, keys = member("signal"), member("resolution"), member("receipt_verification")
-    correlation, privacy = member("discovery_correlation"), member("privacy")
+    correlation, privacy, counters = member("discovery_correlation"), member("privacy"), member("discovery_counters")
+    sanctuary = member("sanctuary")
     routes = [f"{r.get('method', 'GET')} {r.get('path')} ({r.get('behaviour', 'unspecified')})"
               for r in manifest.get("ingress_routes") or [] if isinstance(r, dict) and r.get("path")]
     report.update(
@@ -267,17 +287,25 @@ def check_asp_manifest(domain_or_url: str | None = None, *, allow_local: bool = 
         signal_status=signal.get("status"),
         transport_envelope=bool(signal.get("transport_envelope")),
         resolution=({"endpoint": resolution.get("endpoint"), "method": resolution.get("method"),
+                     "methods": _methods(resolution, "methods", "method"),
+                     "get_telemetry_parameters": resolution.get("get_telemetry_parameters"),
                      "ticket_ttl_seconds": resolution.get("ticket_ttl_seconds"),
                      "ticket_format": (resolution.get("ticket_format") or {}).get("name"),
                      "ticket_redemption": resolution.get("ticket_redemption")} if resolution else None),
         signed_receipts=({"algorithm": keys.get("algorithm"), "key_id": keys.get("key_id")} if keys else None),
+        context_report=({"endpoint": sanctuary.get("endpoint"), "methods": _methods(sanctuary, "methods", "method"),
+                         "get_parameters": sanctuary.get("get_parameters"),
+                         "max_submissions": sanctuary.get("max_submissions")} if sanctuary else None),
         discovery_correlation=({"enabled": correlation.get("enabled"),
                                 "window_seconds": correlation.get("window_seconds")} if correlation else None),
+        discovery_counters=({"enabled": counters.get("enabled"), "routes": counters.get("routes")}
+                            if counters else None),
         plaintext_ip_storage=privacy.get("plaintext_ip_storage"),
         statement=manifest.get("statement"),
         finding=(f"{url} declares ASP {manifest.get('asp_version')} at level {manifest.get('compliance_level')}. "
                  "Reading it is a discovery request: where discovery_correlation is enabled, the node records a "
-                 "terminal signal that follows from the same network within window_seconds."),
+                 "terminal signal that follows from the same network within window_seconds; where "
+                 "discovery_counters is enabled, it counts the request in aggregate, per document and client class."),
     )
     return report
 
@@ -333,9 +361,10 @@ TOOLS: list[dict[str, Any]] = [
         "description": (
             "Reads the ASP manifest (/.well-known/agent-shelter.json) of a host and summarises it: protocol version, "
             "compliance level (L1-static, L2-transactional, L3-observatory), ingress routes, transport envelope, "
-            "receipt-signing key and recording rules. Default host: https://agent-shelter.org, the ASP reference "
-            "node. The manifest is a discovery document: a node with discovery correlation records a terminal "
-            "signal that follows from the same network within its correlation window."),
+            "receipt-signing key, resolution methods and recording rules. Default host: https://agent-shelter.org, "
+            "the ASP reference node. The manifest is a discovery document: a node with discovery correlation records "
+            "a terminal signal that follows from the same network within its correlation window, and a node with "
+            "discovery counters counts the request in aggregate (per document and client class, no address)."),
         "inputSchema": {"type": "object", "properties": {"domain_or_url": {
             "type": "string", "maxLength": MAX_URL_CHARS,
             "description": "Host name or URL; the manifest is read from its origin. Default: https://agent-shelter.org"}},
@@ -363,7 +392,10 @@ TOOLS: list[dict[str, Any]] = [
             "https://reader.agent-shelter.org/v1/reader?url=<target_url>&envelope=200). The reader never fetches the "
             "target: it answers with the ASP terminal signal (RFC 9457 problem details, terminal true, "
             "success_probability 0) and a single-use ticket (48 characters, also in the header Agent-Ticket and in "
-            "an absolute resolution_uri), carried with HTTP 200 because of envelope=200. The target URL is sent to "
+            "an absolute resolution_uri), carried with HTTP 200 because of envelope=200; the ticket maps to a "
+            "signed receipt by POST or, where resolution_methods lists GET, by GET, and only that receipt is a "
+            "proof. Its drop box takes one optional context report, by POST or, where listed, by GET with query "
+            "parameters. The target URL is sent to "
             "agent-shelter.org, which records it (shortened, secrets "
             "scrubbed) with pseudonymised client data when the request follows a discovery request from the same "
             f"network or the ticket is redeemed; see {PRIVACY_URL}."),
